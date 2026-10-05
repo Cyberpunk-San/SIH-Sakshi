@@ -1,26 +1,124 @@
 @import "tailwindcss";
 
+/* Sakshi — "witness". Visual language: archival paper, ink, a registry seal.
+   Fonts are local system stacks only: the product runs air-gapped. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #f5f2ea;
+  --paper-2: #ece7db;
+  --card: #fffdf8;
+  --ink: #17191c;
+  --ink-2: #4a4e55;
+  --ink-3: #7b7f86;
+  --rule: #d9d2c2;
+  --rule-2: #c7beab;
+  --seal: #9e2a1f;
+  --seal-soft: #f3dcd6;
+  --verdigris: #1d5f57;
+  --verdigris-soft: #d6e8e3;
+  --ochre: #8a5a10;
+  --ochre-soft: #f1e3c4;
+  --focus: #1d5f57;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root[data-theme="dark"] {
+  --paper: #121314;
+  --paper-2: #1a1c1e;
+  --card: #18191b;
+  --ink: #ece8de;
+  --ink-2: #b8b3a8;
+  --ink-3: #8a867d;
+  --rule: #2d2f32;
+  --rule-2: #3b3e42;
+  --seal: #e0705f;
+  --seal-soft: #3a1f1b;
+  --verdigris: #6cc2b3;
+  --verdigris-soft: #15302c;
+  --ochre: #dcae5c;
+  --ochre-soft: #352a15;
+  --focus: #6cc2b3;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --paper: #121314;
+    --paper-2: #1a1c1e;
+    --card: #18191b;
+    --ink: #ece8de;
+    --ink-2: #b8b3a8;
+    --ink-3: #8a867d;
+    --rule: #2d2f32;
+    --rule-2: #3b3e42;
+    --seal: #e0705f;
+    --seal-soft: #3a1f1b;
+    --verdigris: #6cc2b3;
+    --verdigris-soft: #15302c;
+    --ochre: #dcae5c;
+    --ochre-soft: #352a15;
+    --focus: #6cc2b3;
   }
 }
 
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-seal: var(--seal);
+  --color-seal-soft: var(--seal-soft);
+  --color-verdigris: var(--verdigris);
+  --color-verdigris-soft: var(--verdigris-soft);
+  --color-ochre: var(--ochre);
+  --color-ochre-soft: var(--ochre-soft);
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Charter, Georgia, serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+html {
+  background: var(--paper);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--verdigris-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.font-serif {
+  font-feature-settings: "onum" 1, "kern" 1;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin ledger rules used in tables and the block list. */
+.ledger-rule > * + * {
+  border-top: 1px solid var(--rule);
+}
+
+@keyframes sakshi-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot {
+  animation: sakshi-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot { animation: none; }
 }

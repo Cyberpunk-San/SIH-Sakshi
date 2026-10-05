@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Sakshi runtime data: keys, ledger, vault
+/data/
+__pycache__/
+.pytest_cache/
+/docker-data/
+
+# Agent instruction files
+CLAUDE.md
+AGENTS.md
+
+# Demo build artifacts (large files)
+/demo/

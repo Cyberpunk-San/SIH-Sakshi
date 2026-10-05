@@ -1,0 +1,5 @@
+# Public HTTPS front door for a cloud demo server. Certificates are obtained automatically.
+{$SAKSHI_DOMAIN} {
+	encode gzip
+	reverse_proxy web:3000
+}

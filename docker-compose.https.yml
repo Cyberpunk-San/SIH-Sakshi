@@ -1,0 +1,23 @@
+# HTTPS for a public server:  SAKSHI_DOMAIN=sakshi.example.org docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+# The domain's DNS A record must point at the server, and ports 80 + 443 must be open.
+services:
+  web:
+    ports: !reset []
+    environment:
+      SAKSHI_SECURE_COOKIES: "1"
+    networks: [ledger, internal, edge]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      SAKSHI_DOMAIN: ${SAKSHI_DOMAIN:?set SAKSHI_DOMAIN to your domain name}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [web]
+    networks: [edge]
+networks:
+  edge: {}
+volumes:
+  caddy_data: {}

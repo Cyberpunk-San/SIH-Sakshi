@@ -1,0 +1,53 @@
+# Single-host deployment of the whole air-gapped stack.
+#
+#   docker compose run --rm setup          # once: creates ./docker-data (keys, genesis)
+#   docker compose up -d
+#
+# In a multi-site deployment run each validator on its own machine with only its own
+# data/nodes/<id> directory and passphrase, and pass --hosts with real addresses to setup.
+
+x-validator: &validator
+  image: sakshi-validator:latest
+  build: { context: ., dockerfile: deploy/Dockerfile, target: validator }
+  restart: unless-stopped
+  volumes: ["${SAKSHI_DATA_DIR:-./docker-data}:/data"]
+  networks: [ledger]
+
+services:
+  setup:
+    image: sakshi-validator:latest
+    build: { context: ., dockerfile: deploy/Dockerfile, target: validator }
+    profiles: ["setup"]
+    volumes: ["${SAKSHI_DATA_DIR:-./docker-data}:/data"]
+    command: ["scripts/setup.ts", "--hosts", "v1,v2,v3,v4"]
+
+  v1: { <<: *validator, command: ["ledger/node.ts", "--id", "v1"] }
+  v2: { <<: *validator, command: ["ledger/node.ts", "--id", "v2"] }
+  v3: { <<: *validator, command: ["ledger/node.ts", "--id", "v3"] }
+  v4: { <<: *validator, command: ["ledger/node.ts", "--id", "v4"] }
+
+  wm:
+    image: sakshi-wm:latest
+    build: { context: ., dockerfile: deploy/Dockerfile, target: wm }
+    restart: unless-stopped
+    environment:
+      SAKSHI_WM_KEY_FILE: /data/secrets/wm.key
+    entrypoint: ["sh", "-c", "SAKSHI_INTERNAL_TOKEN=$$(cat /data/secrets/internal.token) exec python -m uvicorn server:app --host 0.0.0.0 --port 7200 --timeout-keep-alive 75 --log-level warning"]
+    volumes: ["${SAKSHI_DATA_DIR:-./docker-data}/secrets:/data/secrets:ro"]
+    networks: [internal]
+
+  web:
+    image: sakshi-web:latest
+    build: { context: ., dockerfile: deploy/Dockerfile, target: web }
+    restart: unless-stopped
+    environment:
+      SAKSHI_WM_URL: http://wm:7200
+      KEEP_ALIVE_TIMEOUT: "65000"   # outlive proxy / port-forwarder idle timeouts
+    volumes: ["${SAKSHI_DATA_DIR:-./docker-data}:/data"]
+    ports: ["${SAKSHI_PORT:-3000}:3000"]
+    depends_on: [v1, v2, v3, v4, wm]
+    networks: [ledger, internal]
+
+networks:
+  ledger: {}
+  internal: { internal: true }

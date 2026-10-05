@@ -1,0 +1,10 @@
+node_modules
+.next
+data
+docker-data
+demo
+.git
+sakshi-offline*
+**/__pycache__
+**/.pytest_cache
+*.log

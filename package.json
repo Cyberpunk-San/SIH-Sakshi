@@ -6,12 +6,31 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "setup": "tsx scripts/setup.ts",
+    "ledger": "tsx scripts/start-all.ts --no-web",
+    "stack": "tsx scripts/start-all.ts",
+    "stack:dev": "tsx scripts/start-all.ts --dev",
+    "test": "tsx --test tests/core.test.ts tests/ledger.test.ts",
+    "test:wm": "python -m pytest wm-engine -q",
+    "e2e": "tsx scripts/e2e.ts",
+    "tamper-demo": "tsx scripts/tamper-demo.ts",
+    "verify-evidence": "tsx scripts/verify-evidence.ts",
+    "postbuild": "node scripts/postbuild.mjs",
+    "demo:seed": "tsx scripts/demo-seed.ts",
+    "demo:capture": "tsx scripts/demo-capture.ts",
+    "demo:visuals": "python demo/tools/make_visuals.py",
+    "demo:reset": "tsx scripts/demo-reset.ts",
+    "test:wm-stress": "python tests/stress_wm.py 20"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@noble/post-quantum": "^0.7.1",
     "next": "16.3.8",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -20,7 +39,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
+    "playwright-core": "^1.63.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }
