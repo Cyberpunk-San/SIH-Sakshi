@@ -19,7 +19,7 @@ const REC = path.join(DEMO, "assets", "recordings");
 const RAW = path.join(REC, "_raw");
 const PASS = "Sakshi-Demo-2026";
 const VIEW = { width: 1920, height: 1080 };
-const state = JSON.parse(fs.readFileSync(path.join(DEMO, "demo-state.json"), "utf8"));
+if (!fs.existsSync(path.join(DEMO, "demo-state.json"))) throw new Error("run `npm run demo:seed` first");
 const regPass = fs.readFileSync(path.join(DEMO, "data", "bootstrap", "registrar.pass"), "utf8").trim();
 
 for (const d of [SHOTS, REC, RAW]) fs.mkdirSync(d, { recursive: true });

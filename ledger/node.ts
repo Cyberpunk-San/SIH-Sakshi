@@ -86,7 +86,7 @@ function log(...a: unknown[]) {
 
 let identity: Identity;
 let state = new LedgerState(genesis);
-let blocks: Block[] = []; // blocks[0] is height 1
+const blocks: Block[] = []; // blocks[0] is height 1
 const lineHashes: string[] = []; // sha256 of each persisted line, for the integrity monitor
 const mempool = new Map<string, Tx>();
 // Gossiped txs that are not valid *yet* (e.g. a delivery whose decryption block this node has
@@ -101,6 +101,12 @@ type Incident = { at: number; kind: string; detail: string; quarantined?: string
 let incidents: Incident[] = [];
 const releases: Record<string, number> = {};
 const seenReleaseNonces = new Map<string, number>();
+// If the release log was unreadable at startup we cannot prove which sessions already got a
+// share, so sessions committed before this instant are refused (fail closed for one window).
+let releasesTrustedFrom = 0;
+// The in-memory chain is ahead of the file because a write failed; rewrite, don't quarantine.
+let chainDirty = false;
+let storageDown = false;
 
 const height = () => blocks.length;
 const headHash = () => (blocks.length ? blocks[blocks.length - 1].hash : genesis.chainId);
@@ -110,11 +116,37 @@ const leaderFor = (h: number, r: number) => G.validators[(h + r) % G.validators.
 function recordIncident(kind: string, detail: string, quarantined?: string) {
   const inc = { at: Date.now(), kind, detail, quarantined };
   incidents = [...incidents.slice(-49), inc];
-  fs.writeFileSync(INCIDENTS_FILE, JSON.stringify(incidents, null, 2));
   log(`INCIDENT ${kind}: ${detail}`);
+  // The incident log is diagnostic; failing to persist it must never take the node down.
+  try {
+    writeJsonAtomic(INCIDENTS_FILE, incidents);
+  } catch (e) {
+    log(`could not persist incident log: ${(e as Error).message}`);
+  }
 }
 
 // ------------------------------------------------------------------ persistence
+
+/** Write-then-rename, so a crash mid-write leaves the previous file intact, never a torn one. */
+function writeJsonAtomic(file: string, data: unknown) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+/** Read a JSON state file; a corrupt one is set aside for inspection and `null` returned. */
+function readJsonState<T>(file: string): T | null {
+  if (!fs.existsSync(file)) return null;
+  const raw = fs.readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const q = `${file}.corrupt-${Date.now()}`;
+    fs.renameSync(file, q);
+    log(`${path.basename(file)} is not valid JSON; moved to ${path.basename(q)}`);
+    return null;
+  }
+}
 
 function serialise(b: Block): string {
   return JSON.stringify(b);
@@ -122,8 +154,15 @@ function serialise(b: Block): string {
 
 function appendBlock(b: Block) {
   const line = serialise(b);
-  fs.appendFileSync(CHAIN_FILE, line + "\n");
   lineHashes.push(sha256Hex(line));
+  try {
+    fs.appendFileSync(CHAIN_FILE, line + "\n");
+  } catch (e) {
+    // The block is committed and verified in memory; the integrity check rewrites the file
+    // from memory once storage is back.
+    chainDirty = true;
+    log(`could not append block #${b.header.height}: ${(e as Error).message}`);
+  }
 }
 
 function rewriteChainFile() {
@@ -181,8 +220,16 @@ function promoteDeferred() {
 
 function loadChain() {
   fs.mkdirSync(NODE_DIR, { recursive: true });
-  if (fs.existsSync(RELEASES_FILE)) Object.assign(releases, JSON.parse(fs.readFileSync(RELEASES_FILE, "utf8")));
-  if (fs.existsSync(INCIDENTS_FILE)) incidents = JSON.parse(fs.readFileSync(INCIDENTS_FILE, "utf8"));
+  // readJsonState moves a corrupt file aside, so "existed before, gone after" means corrupt.
+  const hadIncidents = fs.existsSync(INCIDENTS_FILE);
+  incidents = readJsonState<Incident[]>(INCIDENTS_FILE) ?? [];
+  if (hadIncidents && !fs.existsSync(INCIDENTS_FILE)) recordIncident("STATE_FILE_CORRUPT", "incident log was unreadable and has been restarted");
+  const hadReleases = fs.existsSync(RELEASES_FILE);
+  Object.assign(releases, readJsonState<Record<string, number>>(RELEASES_FILE) ?? {});
+  if (hadReleases && !fs.existsSync(RELEASES_FILE)) {
+    releasesTrustedFrom = Date.now();
+    recordIncident("STATE_FILE_CORRUPT", "share-release log was unreadable; sessions committed before this restart will not be served");
+  }
   if (!fs.existsSync(CHAIN_FILE)) {
     fs.writeFileSync(CHAIN_FILE, "");
     return;
@@ -211,7 +258,17 @@ function loadChain() {
 /** Continuous self-audit: the on-disk chain must match the verified in-memory chain. */
 function integrityCheck() {
   try {
+    if (chainDirty) {
+      rewriteChainFile();
+      chainDirty = false;
+      log(`chain file rewritten from memory after a failed write (${blocks.length} blocks)`);
+    }
     const lines = fs.readFileSync(CHAIN_FILE, "utf8").split("\n").filter(Boolean);
+    if (storageDown) {
+      storageDown = false;
+      integrity.ok = true;
+      recordIncident("STORAGE_RECOVERED", "data folder is readable again");
+    }
     let problem: string | null = null;
     if (lines.length < blocks.length) problem = `chain file truncated: ${lines.length} of ${blocks.length} blocks present`;
     for (let i = 0; i < Math.min(lines.length, blocks.length) && !problem; i++) {
@@ -238,8 +295,22 @@ function integrityCheck() {
       integrity = { ...integrity, lastCheck: Date.now(), checkedBlocks: blocks.length };
     }
   } catch (e) {
-    recordIncident("CHAIN_UNREADABLE", (e as Error).message);
-    rewriteChainFile();
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      // The file was deleted: that is tampering, restore it from the verified chain.
+      recordIncident("CHAIN_UNREADABLE", err.message);
+      try {
+        rewriteChainFile();
+      } catch (w) {
+        log(`could not restore chain file: ${(w as Error).message}`);
+      }
+      return;
+    }
+    // Storage itself is failing (EIO, EACCES, a dropped bind mount...). Keep serving from the
+    // verified in-memory chain, report degraded integrity, and retry on the next check.
+    if (!storageDown) recordIncident("STORAGE_UNAVAILABLE", err.message);
+    storageDown = true;
+    integrity = { ok: false, lastCheck: Date.now(), checkedBlocks: blocks.length };
   }
 }
 
@@ -559,13 +630,20 @@ async function handleRelease(req: ReleaseRequest) {
   if (Date.now() - committedAt > RELEASE_WINDOW_MS) throw httpError(410, "release window for this session has expired");
   if (state.deliveries.has(req.decryptTxId)) throw httpError(409, "session already delivered");
   if (releases[req.decryptTxId]) throw httpError(409, "share already released for this session");
+  if (committedAt < releasesTrustedFrom) throw httpError(409, "release log was lost for this session; cannot prove the share was not already released");
   const doc = state.docs.get(rec.body.docId)!;
   if (state.activeCert(rec.body.recipientId, Date.now()) === null) throw httpError(403, "recipient certificate is no longer active");
+  // Record the release durably before the share leaves this node. If that fails, refuse:
+  // the session stays marked in memory, so it can never be served twice.
+  releases[req.decryptTxId] = Date.now();
+  try {
+    writeJsonAtomic(RELEASES_FILE, releases);
+  } catch (e) {
+    throw httpError(503, `cannot record share release: ${(e as Error).message}`);
+  }
   const share = openValidatorShare(identity.kem.secretKey, doc.body.docId, NODE_ID, doc.body.validatorShares[NODE_ID]);
   const sealed = seal(fromB64(G.gateway.kemPk), encodeShare(share), "release", utf8(`${req.decryptTxId}/${NODE_ID}`));
   share.y.fill(0);
-  releases[req.decryptTxId] = Date.now();
-  fs.writeFileSync(RELEASES_FILE, JSON.stringify(releases));
   log(`released K_G share for session ${req.decryptTxId.slice(0, 10)} (${rec.body.recipientId})`);
   return { validatorId: NODE_ID, share: sealed };
 }
@@ -593,7 +671,7 @@ function stripDoc<T extends { body: { wrappedKeys?: unknown; validatorShares?: u
   return { ...d, body: { ...d.body, wrappedKeys: undefined, validatorShares: undefined } };
 }
 
-type Handler = (url: URL, body: any) => unknown | Promise<unknown>;
+type Handler = (url: URL, body: unknown) => unknown | Promise<unknown>;
 const routes: Record<string, Handler> = {
   "GET /status": () => ({
     id: NODE_ID,
@@ -630,7 +708,7 @@ const routes: Record<string, Handler> = {
     };
   },
   "POST /tx": (_u, body) => {
-    const tx = body?.tx as Tx;
+    const tx = (body as { tx?: Tx })?.tx as Tx;
     const err = state.check(tx, Date.now());
     if (err) throw httpError(400, err);
     const id = txId(tx);
@@ -641,7 +719,7 @@ const routes: Record<string, Handler> = {
     return { txId: id };
   },
   "POST /gossip/tx": (_u, body) => {
-    const tx = body?.tx as Tx;
+    const tx = (body as { tx?: Tx })?.tx as Tx;
     const err = state.check(tx, Date.now());
     if (!err) mempool.set(txId(tx), tx);
     else if (err !== "duplicate transaction" && deferred.size < 5000) deferred.set(txId(tx), { tx, at: Date.now() });
@@ -700,7 +778,7 @@ const routes: Record<string, Handler> = {
   },
   "POST /consensus/precommit": (_u, body) => handlePrecommit(body as PrecommitRequest),
   "POST /consensus/commit": async (_u, body) => {
-    const b = body?.block as Block;
+    const b = (body as { block?: Block })?.block as Block;
     if (!b?.header) throw httpError(400, "missing block");
     if (b.header.height <= height()) return { ok: true, already: true };
     if (b.header.height > height() + 1) {
