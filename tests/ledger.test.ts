@@ -135,6 +135,28 @@ test("a node tampered with while offline detects it on restart and re-syncs from
   assert.ok(fs.readdirSync(path.dirname(file)).some((f) => f.includes("tampered")), "evidence file kept");
 });
 
+test("a node killed mid-write (torn state files and chain line) restarts and heals", async () => {
+  const h = (await status("v1")).height;
+  await stopNode("v2");
+  const dir = path.join(DATA, "nodes", "v2");
+  const file = path.join(dir, "chain.jsonl");
+  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+  fs.writeFileSync(file, lines.slice(0, -1).join("\n") + "\n" + lines.at(-1)!.slice(0, 40)); // torn last block
+  fs.writeFileSync(path.join(dir, "incidents.json"), '[{"at":1,"kind":"CHAIN_TA');
+  fs.writeFileSync(path.join(dir, "releases.json"), '{"abc":17');
+  startNode("v2");
+  assert.ok(await waitFor(async () => (await status("v2")).height >= h, 30000), "v2 did not come back");
+  const s = await status("v2");
+  assert.equal(s.headHash, (await status("v1")).headHash);
+  assert.ok(s.incidents.some((i: { kind: string }) => i.kind === "STATE_FILE_CORRUPT"));
+  const files = fs.readdirSync(dir);
+  assert.ok(files.some((f) => f.startsWith("incidents.json.corrupt-")), "torn incident log kept for inspection");
+  assert.ok(files.some((f) => f.startsWith("releases.json.corrupt-")), "torn release log kept for inspection");
+  JSON.parse(fs.readFileSync(path.join(dir, "incidents.json"), "utf8")); // rewritten whole
+  const id = await submit(certTx(), "v2");
+  assert.ok(await waitFor(committed(id, "v2"), 15000), "healed node does not take part in consensus");
+});
+
 test("tx ids are content-addressed", () => {
   const tx = certTx();
   assert.equal(txId(tx), txId(JSON.parse(JSON.stringify(tx))));

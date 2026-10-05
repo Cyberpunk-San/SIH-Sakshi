@@ -98,6 +98,18 @@ npm run stack            # 4 validators + watermark engine + web on :3000
 
 `npm run stack:dev` runs the same stack with `next dev`.
 
+## Quick start (Docker)
+
+Requirements: Docker Desktop (or Docker Engine with the Compose plugin). Nothing else is needed on the host.
+
+```bash
+docker compose build                 # sakshi-web, sakshi-validator, sakshi-wm
+docker compose run --rm setup        # once: creates docker-data/ (genesis, keys, registrar)
+docker compose up -d                 # 4 validators + watermark engine + web on :3000
+```
+
+If port 3000 is taken, publish on another port with `SAKSHI_PORT=3100 docker compose up -d`, or put `SAKSHI_PORT=3100` in a `.env` file next to `docker-compose.yml`. The registrar key is in `docker-data/bootstrap/`. [DEPLOY.md](DEPLOY.md) covers the full Docker guide: first sign-in, everyday commands, a cloud demo server with HTTPS, backups and troubleshooting.
+
 ## Air-gapped deployment
 
 ```bash
@@ -106,7 +118,7 @@ sh deploy/package-offline.sh                     # → sakshi-offline.tar (+ .sh
 # offline host
 tar xf sakshi-offline.tar && cd sakshi-offline
 docker load -i images.tar
-mkdir -p data && sudo chown 1000:1000 data        # containers run as non-root
+mkdir -p docker-data && sudo chown 1000:1000 docker-data   # containers run as uid 1000
 docker compose run --rm setup && docker compose up -d
 ```
 
@@ -116,11 +128,19 @@ For multiple sites, run `npm run setup -- --hosts 10.0.0.11,10.0.0.12,10.0.0.13,
 
 | Command | What it proves |
 |---|---|
-| `npm test` | Crypto core (Shamir, Merkle, ML-KEM sealing, broadcast encryption, swapped-chunk detection, Argon2id key files). Plus a live 4-node ledger: commits at 4/4 and 3/4, halts safely at 2/4 and recovers, rejects forged signatures, and a node tampered with while offline detects it and heals from peers. |
+| `npm test` | Crypto core (Shamir, Merkle, ML-KEM sealing, broadcast encryption, swapped-chunk detection, Argon2id key files). Plus a live 4-node ledger: commits at 4/4 and 3/4, halts safely at 2/4 and recovers, rejects forged signatures, a node tampered with while offline detects it and heals from peers, and a node killed mid-write (torn state files and chain line) restarts and heals. |
 | `npm run test:wm` | 21 watermark robustness tests (images and both PDF modes). |
 | `npm run e2e` | 32 checks against the running stack: enrolment, group distribution, per-session marks, non-recipient refusal, 5 leak scenarios attributed, evidence tamper detection, offline verifier, revocation. |
 | `npm run tamper-demo` | Rewrites a decryption record on a validator's disk. The edit is detected within ~5 s, quarantined and restored. |
 | `npm run verify-evidence -- bundle.json [--genesis data/genesis.json]` | Offline verification of an evidence bundle with no network access. |
+
+`npm run e2e` targets `http://localhost:3000` and reads `data/` by default. To test the Docker stack, point it at the container's port and data folder:
+
+```bash
+SAKSHI_URL=http://localhost:3100 SAKSHI_DATA=docker-data npm run e2e
+```
+
+On 2026-10-05 the Docker stack passed all 32 checks this way, on Windows 11 with Docker Desktop.
 
 ## Threat model
 
@@ -143,7 +163,7 @@ For multiple sites, run `npm run setup -- --hosts 10.0.0.11,10.0.0.12,10.0.0.13,
 - **The gateway sees plaintext** for the moment it takes to watermark. In production it belongs on a hardened host or inside a TEE. It cannot decrypt on its own or without leaving a committed record.
 - **Consensus.** The protocol is safe against one Byzantine validator out of four, and live with one crashed validator. An adversarial network partition at the exact moment of a vote can stall a height until it heals; it never forks.
 - **Clock.** Validators accept proposals within ±30 s of their own clock, so LAN NTP (or a local time source) is required.
-- **Not yet tested here.** The Docker images are defined (`deploy/Dockerfile`, `docker-compose.yml`, validated with `docker compose config`) but were not built in this environment.
+- **Storage failures degrade, never corrupt.** If a validator's data folder becomes unreadable (for example, a Docker Desktop bind mount dropping), the node keeps serving from its verified in-memory chain, reports `STORAGE_UNAVAILABLE` and red integrity on `/audit`, and rewrites its chain file once storage returns. While the share-release log can't be written, it refuses to release key shares, so opening a document needs the other three validators. State files are written atomically. If the node is killed mid-write anyway, the torn file is set aside as `*.corrupt-<time>`, and a torn chain line is quarantined and re-synced from peers. If the release log was lost, the node refuses to release shares for sessions committed before its restart, so a share can never be released twice.
 
 ## Demo kit
 
@@ -169,5 +189,7 @@ src/app/          UI (inbox, send, sent, forensics, ledger, admin, enrol, login)
 ledger/node.ts    validator node
 wm-engine/        watermark engine (engine.py, pdfmark.py, server.py, tests)
 scripts/          setup ceremony, stack launcher, e2e, tamper demo, offline evidence verifier
-deploy/           Dockerfile (web / validator / wm targets) and offline packaging
+deploy/           Dockerfile (web / validator / wm targets), Caddyfile, offline packaging
+docker-compose.yml        single-host stack (setup, v1..v4, wm, web); docker-compose.https.yml adds Caddy
+README.md · DEPLOY.md     overview · step-by-step Docker / cloud / air-gap guide
 ```

@@ -4,7 +4,7 @@ Sakshi runs as six containers on one machine:
 
 | Service | What it does | Port |
 |---|---|---|
-| `web` | Web app + gateway (sign-in, send, inbox, forensics, ledger pages) | 3000 (published) |
+| `web` | Web app + gateway (sign-in, send, inbox, forensics, ledger pages) | 3000 (published; change with `SAKSHI_PORT`) |
 | `v1`–`v4` | Validator nodes of the permissioned ledger (quorum 3 of 4) | 7101–7104 (internal only) |
 | `wm` | Watermark engine (embed and trace) | 7200 (internal only, no internet route) |
 
@@ -14,7 +14,9 @@ All keys, the ledger and the encrypted document store live in one folder on the 
 
 ## 1. Run it on your own computer (Windows, macOS or Linux)
 
-Requirements: Docker Desktop (or Docker Engine with the Compose plugin), about 4 GB free RAM and 5 GB disk.
+Requirements: Docker Desktop (or Docker Engine with the Compose plugin), about 4 GB free RAM and 5 GB disk. The three images take about 2.3 GB (web ≈ 0.4 GB, validator ≈ 1 GB, wm ≈ 0.9 GB).
+
+On Windows and macOS, **start Docker Desktop first**. Until it is running, every `docker` command fails with an error like `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`. You don't need to `chown` anything on Windows or macOS.
 
 ```bash
 cd SIH-Sakshi
@@ -33,6 +35,37 @@ docker compose ps
 ```
 
 Open **http://localhost:3000**.
+
+If something else already uses port 3000, choose another port. Either set it for one command:
+
+```bash
+SAKSHI_PORT=3100 docker compose up -d          # bash / Git Bash / macOS / Linux
+$env:SAKSHI_PORT=3100; docker compose up -d    # Windows PowerShell
+```
+
+Or make it permanent with a `.env` file next to `docker-compose.yml` (it is git-ignored):
+
+```
+SAKSHI_PORT=3100
+```
+
+Then open http://localhost:3100.
+
+All services use `restart: unless-stopped`. Once started, they come back by themselves whenever Docker Desktop or the machine restarts, until you run `docker compose stop` or `down`.
+
+### Check that it works
+
+From the project folder on a machine with Node installed (`npm install` once), run the full end-to-end test against the containers. It enrols test users, distributes a PDF and an image, decrypts them, and traces five simulated leaks back to the right person. It takes about a minute and should end with `32 passed, 0 failed`:
+
+```bash
+SAKSHI_URL=http://localhost:3000 SAKSHI_DATA=docker-data npm run e2e
+```
+
+```powershell
+$env:SAKSHI_URL='http://localhost:3000'; $env:SAKSHI_DATA='docker-data'; npm run e2e
+```
+
+Use your `SAKSHI_PORT` in the URL if you changed it. The test signs in as the registrar using `docker-data/bootstrap/`, so run it **before** you delete that folder (see below). It also adds its users and documents to the ledger (suffixed `-xxxx`), so run it on a test network, not one holding real data.
 
 ### First sign-in (the registrar)
 
@@ -185,6 +218,22 @@ Give each organisation only its own `nodes/<id>/` folder, its `secrets/<id>.pass
 
 ---
 
+## Configuration
+
+Set these in the shell or in a `.env` file next to `docker-compose.yml`:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SAKSHI_PORT` | `3000` | Host port that the web app is published on |
+| `SAKSHI_DATA_DIR` | `./docker-data` | Host folder holding keys, ledger and vault (mounted at `/data` in the containers) |
+| `SAKSHI_DOMAIN` | — | Required with `docker-compose.https.yml`; the domain Caddy gets a certificate for |
+
+Set inside the compose files (change only if you know why): `SAKSHI_WM_URL=http://wm:7200` and `KEEP_ALIVE_TIMEOUT` on `web`, `SAKSHI_WM_KEY_FILE` on `wm`, and `SAKSHI_SECURE_COOKIES=1` from the HTTPS override.
+
+For the test scripts run from the host: `SAKSHI_URL` (default `http://localhost:3000`) and `SAKSHI_DATA` (default `data`).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -193,6 +242,10 @@ Give each organisation only its own `nodes/<id>/` folder, its `secrets/<id>.pass
 | Opening a document says "only 2/3 validators released their key share" | A validator is down: `docker compose ps`, then `docker compose start v1 v2 v3 v4` |
 | "watermark engine is offline" | `docker compose logs wm`; on Linux check `docker-data` is owned by uid 1000 |
 | "permission denied" writing `/data` on Linux | `sudo chown -R 1000:1000 docker-data` |
-| Port 3000 already in use | Stop the other program, or change `"3000:3000"` to e.g. `"8080:3000"` in `docker-compose.yml` |
+| Port 3000 already in use | Stop the other program, or publish on another port: `SAKSHI_PORT=3100 docker compose up -d`, or a `.env` file with `SAKSHI_PORT=3100` (see section 1) |
+| `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified` | Docker Desktop isn't running. Start it, wait until it says *Engine running*, and retry |
+| Validator log shows `INCIDENT STORAGE_UNAVAILABLE` (often `EIO`) | The `docker-data` bind mount dropped, usually because Docker Desktop was quitting or the PC was going to sleep. The validator keeps running from memory and logs `STORAGE_RECOVERED` when the folder is back. If it doesn't recover, run `docker compose restart vN` |
+| `INCIDENT STATE_FILE_CORRUPT` after a crash | A state file was cut off mid-write. It was moved to `docker-data/nodes/vN/*.corrupt-<time>` and the node carried on. Nothing to do; keep the file if you want to inspect it |
+| e2e fails with `ENOENT … bootstrap/registrar.sakshikey` | The bootstrap folder was already deleted. Run the test only against a fresh test network, or point `SAKSHI_DATA` at a folder that still has `bootstrap/` |
 | Sign-in loop on HTTPS | Make sure you started with `docker-compose.https.yml` (it sets secure cookies) |
 | Validators reject blocks after the machine slept | Clocks drifted; restart the stack (`docker compose restart`) and keep NTP running on the host |
